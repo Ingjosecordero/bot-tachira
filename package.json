@@ -1,11 +1,5 @@
-{
-  "name": "bot-tachira-node",
-  "version": "1.0.0",
-  "description": "Bot de Inventario Táchira en Node.js",
-  "main": "index.js",
-  "dependencies": {
-    "telegraf": "^4.16.3",
-    "axios": "^1.6.7",
-    "express": "^4.18.2"
-  }
+"dependencies": {
+  "telegraf": "^4.16.3",
+  "axios": "^1.6.7",
+  "express": "^4.18.2"
 }
