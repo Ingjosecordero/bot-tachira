@@ -4,7 +4,7 @@ const express = require('express');
 
 // --- CONFIGURACIÓN ---
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
-const URL_G = "https://script.google.com/macros/s/AKfycbxWkQSmgguOFTPHChsos6om1JQyi7wdeYuV_EarJCyj3ggKFIR0hsAqkuWIga5xJvkZdQ/exec"; // DEBE SER LA URL DEL DESPLIEGUE EN GOOGLE
+const URL_G = "SU_URL_DE_GOOGLE_APPS_SCRIPT"; // DEBE SER LA URL DEL DESPLIEGUE EN GOOGLE
 
 const app = express();
 
