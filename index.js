@@ -4,15 +4,17 @@ const express = require('express');
 
 // --- CONFIGURACIÓN ---
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
-const URL_G = "SU_URL_DE_GOOGLE_APPS_SCRIPT"; // DEBE SER LA URL DEL DESPLIEGUE EN GOOGLE
+// REEMPLACE LA SIGUIENTE LÍNEA CON SU URL DE GOOGLE ACTUALIZADA:
+const URL_G = "https://script.google.com/macros/s/SU_ID_AQUI/exec"; 
 
 const app = express();
 
-// Servidor Web básico para que el Cron-job mantenga vivo el bot
+// Servidor Web para el Cron-job (Mantiene el bot despierto)
 app.get('/', (req, res) => {
-  res.send('🛰️ SISTEMA TÁCHIRA: Bot de Inventario Operativo 24/7');
+  res.send('🛰️ SISTEMA TÁCHIRA OPERATIVO - MIKROTIK & FIBRA');
 });
 
+// Función para comunicar con Google Sheets
 const callApi = async (params = {}, data = null) => {
     try {
         if (data) {
@@ -22,12 +24,12 @@ const callApi = async (params = {}, data = null) => {
         const res = await axios.get(URL_G, { params });
         return res.data;
     } catch (e) { 
-        console.error("Error API:", e.message);
+        console.error("Error en API Google:", e.message);
         return null; 
     }
 };
 
-// --- TECLADOS ---
+// --- TECLADO PRINCIPAL ---
 const mainButtons = (rango) => {
     let btns = [
         ['📦 INV. GENERAL', '📜 HISTORIAL ART.'],
@@ -39,50 +41,61 @@ const mainButtons = (rango) => {
     return Markup.keyboard(btns).resize();
 };
 
-// --- COMANDOS ---
+// --- COMANDOS Y ACCIONES ---
 bot.start(async (ctx) => {
     const res = await callApi({ op: 'verificar', id: ctx.from.id });
-    if (!res || !res.autorizado) return ctx.reply(`🚫 Acceso denegado. ID: ${ctx.from.id}`);
-    ctx.reply(`🛰️ SISTEMA TÁCHIRA\nBienvenido, Ing. ${res.nombre}`, mainButtons(res.rango));
+    if (!res || !res.autorizado) {
+        return ctx.reply(`🚫 Acceso denegado. Informe su ID al Ing. Cordero: ${ctx.from.id}`);
+    }
+    ctx.reply(`🛰️ SISTEMA TÁCHIRA\nIng. ${res.nombre} en línea.`, mainButtons(res.rango));
 });
 
 bot.command('conciliar', async (ctx) => {
-    const res = await callApi({ op: 'verificar', id: ctx.from.id });
-    if (res.rango !== "SUPERVISOR") return ctx.reply("🚫 No autorizado.");
-    ctx.reply("⏳ Reconstruyendo inventario basado en reportes... Espere.");
-    const resC = await callApi({ op: 'conciliar_inventario' });
-    ctx.reply(`✅ ${resC.msg || "Terminado"}`);
+    const user = await callApi({ op: 'verificar', id: ctx.from.id });
+    if (user.rango !== "SUPERVISOR") return ctx.reply("🚫 Solo personal de Supervisión.");
+    
+    ctx.reply("⚠️ Iniciando conciliación maestra... Reconstruyendo inventario desde reportes.");
+    const res = await callApi({ op: 'conciliar_inventario' });
+    ctx.reply(`✅ ${res.msg || "Proceso terminado"}`);
 });
 
-// --- LÓGICA DE INVENTARIO ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
     const res = await callApi({ op: 'consultar_inv' });
-    if (!res) return ctx.reply("❌ Error de conexión con la base de datos.");
-    let msg = "🏢 **INVENTARIO GENERAL**\n", cz = "";
+    if (!res) return ctx.reply("❌ No se pudo conectar con el inventario.");
+    
+    let msg = "🏢 **INVENTARIO GENERAL**\n", currentZone = "";
     res.forEach(r => {
-        if (r[1].toUpperCase() !== cz) {
-            cz = r[1].toUpperCase(); msg += `\n📍 **${cz}**\n`;
+        if (r[1].toUpperCase() !== currentZone) {
+            currentZone = r[1].toUpperCase();
+            msg += `\n📍 **${currentZone}**\n`;
         }
         msg += ` • ${r[0]} : \`${r[2]}\`\n`;
     });
     ctx.replyWithMarkdown(msg);
 });
 
-bot.hears('📜 HISTORIAL ART.', (ctx) => {
-    ctx.reply("🔍 Ingrese el nombre del artículo para ver su historial:");
-    // Nota: Para manejar el flujo de "pasos", Node requiere middleware o escenas. 
-    // Por simplicidad en este script base, usaremos un listener simple.
+// Historial rápido (Muestra últimos 10 movimientos generales)
+bot.hears('📊 VER SALIDAS', async (ctx) => {
+    const reps = await callApi({ op: 'ver_reps' });
+    if (!reps) return ctx.reply("❌ Sin reportes.");
+    
+    let msg = "📊 **ÚLTIMOS MOVIMIENTOS**\n" + "—".repeat(15) + "\n";
+    reps.slice(-8).reverse().forEach(r => {
+        msg += `🆔 \`${r[0]}\` | 📍 ${r[2]}\n📦 ${r[3]} : ${r[4]}\n👤 ${r[6]}\n` + "—".repeat(10) + "\n";
+    });
+    ctx.replyWithMarkdown(msg);
 });
 
-// Lanzar Bot
-bot.launch();
+// Iniciar Bot
+bot.launch().then(() => console.log("Bot iniciado en Telegram"));
 
-// Puerto para Render
+// Puerto para Render (Imprescindible para el Cron-job)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor HTTP activo en puerto ${PORT}`);
+  console.log(`Servidor de monitoreo activo en puerto ${PORT}`);
 });
 
-// Manejo de cierre limpio
+// Cierre seguro
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+                                
