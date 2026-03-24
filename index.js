@@ -47,7 +47,7 @@ bot.start(async (ctx) => {
     if (!res || !res.autorizado) {
         return ctx.reply(`🚫 Acceso denegado. Informe su ID al Ing. Cordero: ${ctx.from.id}`);
     }
-    ctx.reply(`🛰️ SISTEMA TÁCHIRA\nIng. ${res.nombre} en línea.`, mainButtons(res.rango));
+    ctx.reply(`🛰️ SISTEMA DE REGISTROS Y REPORTES\n ${res.nombre} en línea.`, mainButtons(res.rango));
 });
 
 bot.command('conciliar', async (ctx) => {
