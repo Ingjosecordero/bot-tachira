@@ -5,7 +5,7 @@ const express = require('express');
 // --- CONFIGURACIÓN ---
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 // REEMPLACE LA SIGUIENTE LÍNEA CON SU URL DE GOOGLE ACTUALIZADA:
-const URL_G = "https://script.google.com/macros/s/SU_ID_AQUI/exec"; 
+const URL_G = "https://script.google.com/macros/s/AKfycbwS7AWtfS0LPt-lYN1U2mUvTiq_Z1_H1z1HUfbNGcxnIwRceFWyT76B8IozpJc2d8sbwQ/exec"; 
 
 const app = express();
 
@@ -98,4 +98,3 @@ app.listen(PORT, () => {
 // Cierre seguro
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-                                
