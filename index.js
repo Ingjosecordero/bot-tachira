@@ -18,7 +18,7 @@ const callApi = async (data) => {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
         return res.data;
-    } catch (e) { return { ok: false, msg: e.message }; }
+    } catch (e) { return { ok: false, msg: "Error de red" }; }
 };
 
 const mainButtons = (rango) => {
@@ -33,10 +33,21 @@ bot.start(async (ctx) => {
     ctx.reply(`CONTROL DE REGISTROS Y REPORTES\nBienvenido ${res.nombre}.`, mainButtons(res.rango));
 });
 
-// --- INICIO DE REPORTE MULTIPLE ---
+// --- FLUJO DE CONSULTAS ---
+bot.hears('📦 INV. GENERAL', async (ctx) => {
+    const res = await axios.get(URL_G, { params: { op: 'consultar_inv' } });
+    let msg = "🏢 **INVENTARIO GENERAL**\n", cz = "";
+    res.data.forEach(r => {
+        if (r[1].toUpperCase() !== cz) { cz = r[1].toUpperCase(); msg += `\n📍 **${cz}**\n`; }
+        msg += ` • ${r[0]} : \`${r[2]}\`\n`;
+    });
+    ctx.replyWithMarkdown(msg);
+});
+
+// --- LÓGICA DE REPORTE MULTI-ARTÍCULO ---
 bot.hears(['📝 CREAR REPORTE', '📤 SALIDA ART.'], (ctx) => {
     userState[ctx.from.id] = { items: [], step: 'esperando_articulo' };
-    ctx.reply("📝 Ingrese el NOMBRE del primer artículo:");
+    ctx.reply("📝 Ingrese el NOMBRE del artículo:");
 });
 
 bot.on('text', async (ctx) => {
@@ -52,59 +63,55 @@ bot.on('text', async (ctx) => {
         const cant = parseFloat(ctx.message.text);
         if (isNaN(cant)) return ctx.reply("❌ Ingrese un número válido.");
         
-        // Agregamos al carrito
         state.items.push(`${state.tempArt}:${cant}`);
         state.step = 'esperando_decision';
         
-        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n\n¿Desea agregar otro artículo al mismo reporte?`, 
+        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Desea agregar otro artículo a este reporte?`, 
             Markup.inlineKeyboard([
-                [Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), Markup.button.callback('💾 Finalizar y Enviar', 'FINISH')]
+                [Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), Markup.button.callback('💾 Finalizar Reporte', 'FINISH')]
             ])
         );
     }
 });
 
 bot.on('callback_query', async (ctx) => {
-    const data = ctx.callbackQuery.data;
     const userId = ctx.from.id;
     const state = userState[userId];
-
     if (!state) return ctx.answerCbQuery("Sesión expirada.");
 
-    if (data === 'ADD_MORE') {
+    if (ctx.callbackQuery.data === 'ADD_MORE') {
         state.step = 'esperando_articulo';
         ctx.answerCbQuery();
         ctx.reply("📝 Ingrese el NOMBRE del siguiente artículo:");
     } 
-    else if (data === 'FINISH') {
-        state.step = 'esperando_zona';
+    else if (ctx.callbackQuery.data === 'FINISH') {
         ctx.answerCbQuery();
         const resZonas = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
-        const btns = resZonas.data.map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-        ctx.reply("📍 Seleccione la ZONA final para este reporte:", Markup.inlineKeyboard(btns));
+        const btns = resZonas.data.map(z => [Markup.button.callback(z, `ZFIN:${z}`)]);
+        ctx.reply("📍 Seleccione la ZONA para el reporte final:", Markup.inlineKeyboard(btns));
     } 
-    else if (data.startsWith('ZSET:')) {
-        const zona = data.split(':')[1];
+    else if (ctx.callbackQuery.data.startsWith('ZFIN:')) {
+        const zona = ctx.callbackQuery.data.split(':')[1];
         ctx.answerCbQuery();
-        ctx.reply(`⏳ Guardando reporte de ${state.items.length} artículos en ${zona}...`);
+        ctx.reply(`⏳ Guardando reporte en ${zona}...`);
 
-        // Enviamos todos los artículos juntos separados por comas (formato que espera su Apps Script)
+        // Enviamos el lote completo separado por comas
         const res = await callApi({
             op: 'registrar_salida',
             id: userId,
-            art: state.items.join(','), // Envía "FIBRA:100,HERRAJE:2"
+            art: state.items.join(','), 
             zona: zona
         });
 
         delete userState[userId];
         if (res && res.ok) {
-            ctx.reply(`✅ REPORTE COMPLETO GUARDADO EN ${zona}.`);
+            ctx.reply(`✅ REPORTE GUARDADO CON ÉXITO EN ${zona}.`);
         } else {
-            ctx.reply(`❌ Error al guardar: ${res.msg || "Verifique permisos en Google"}`);
+            ctx.reply(`❌ Error al guardar: ${res.msg || "Error de respuesta"}`);
         }
     }
 });
 
 bot.launch();
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Puerto ${PORT} OK`));
+app.listen(PORT, () => console.log(`Puerto ${PORT} Activo`));
