@@ -2,7 +2,7 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const express = require('express');
 
-const URL_G = "https://script.google.com/macros/s/AKfycbzsx__bUuIyQwjJCo1LLzFYP7w6WELhrXyZw_Ius2OUB24voHxgMjH8rqM8vkhRMT56IA/exec"; 
+const URL_G = "https://script.google.com/macros/s/AKfycbzIturX-xzGwvYLAmLRmPiw11jqaQ7LMNOOzBygSzYyoFwsCIb8ajweiJizUCB7aIe4yA/exec"; 
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 const app = express();
 const userState = {};
@@ -18,27 +18,34 @@ bot.start(async (ctx) => {
     if (res.data.autorizado) ctx.reply(`BIENVENIDO ${res.data.nombre}`, mainButtons(res.data.rango));
 });
 
-// --- INVENTARIO (LISTO) ---
+// --- INVENTARIO (MENSAJES POR ZONA) ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
+    ctx.reply("⏳ Cargando inventario por almacenes...");
     const res = await axios.get(URL_G, { params: { op: 'consultar_inv' } });
-    let msg = "📦 **INVENTARIO ACTUAL**\n";
-    res.data.forEach(r => msg += `• ${r[0]} (${r[1]}) ➔ ${r[2]}\n`);
-    ctx.replyWithMarkdown(msg);
+    const zonas = {};
+    res.data.forEach(r => {
+        if (!zonas[r[1]]) zonas[r[1]] = [];
+        zonas[r[1]].push(`• ${r[0]} ➔ \`${r[2]}\``);
+    });
+    for (const z in zonas) {
+        let msg = `📍 **ZONA: ${z}**\n` + "—".repeat(15) + "\n" + zonas[z].join('\n');
+        await ctx.replyWithMarkdown(msg);
+    }
 });
 
-// --- HISTORIAL ARTICULO ---
+// --- HISTORIAL CON SIGNOS (+/-) ---
 bot.hears('📜 HISTORIAL ART.', (ctx) => {
-    userState[ctx.from.id] = { step: 'historial_nombre' };
-    ctx.reply("🔍 Ingrese el NOMBRE del artículo para ver su historial:");
+    userState[ctx.from.id] = { step: 'hist_art' };
+    ctx.reply("🔍 Ingrese el NOMBRE del artículo:");
 });
 
-// --- ACCIONES (AGREGAR, SALIDA, REPORTE, TRANSFERIR) ---
 bot.hears(['📥 AGREGAR ART.', '📤 SALIDA ART.', '📝 CREAR REPORTE', '🔄 TRANSFERIR'], async (ctx) => {
     const modo = ctx.message.text;
     userState[ctx.from.id] = { modo, items: [], step: 'esperando_zona' };
     const res = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
-    const btns = res.data.map(z => [Markup.button.callback(z, `Z:${z}`)]);
-    ctx.reply(`📍 [${modo}]\nSeleccione Zona${modo === '🔄 TRANSFERIR' ? ' ORIGEN' : ''}:`, Markup.inlineKeyboard(btns));
+    let btns = res.data.map(z => [Markup.button.callback(z, `Z:${z}`)]);
+    if (modo === '📥 AGREGAR ART.') btns.push([Markup.button.callback('➕ NUEVA ZONA', 'Z:NUEVA')]);
+    ctx.reply(`📍 [${modo}]\nSeleccione Zona:`, Markup.inlineKeyboard(btns));
 });
 
 bot.on('callback_query', async (ctx) => {
@@ -48,23 +55,16 @@ bot.on('callback_query', async (ctx) => {
 
     if (data.startsWith('Z:')) {
         const zona = data.split(':')[1];
-        if (state.modo === '🔄 TRANSFERIR' && !state.zona_origen) {
-            state.zona_origen = zona;
-            const res = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
-            const btns = res.data.filter(z => z !== zona).map(z => [Markup.button.callback(z, `Z:${z}`)]);
-            return ctx.reply("📍 Seleccione Zona DESTINO:", Markup.inlineKeyboard(btns));
+        if (zona === 'NUEVA') {
+            state.step = 'creando_zona';
+            return ctx.reply("📝 Escriba el nombre de la NUEVA ZONA:");
         }
-        if (state.modo === '🔄 TRANSFERIR') state.zona_destino = zona;
-        else state.zona = zona;
-        
+        state.zona = zona;
         state.step = 'esperando_art';
-        ctx.reply("📝 Nombre del artículo:");
-    } else if (data === 'ADD') {
-        state.step = 'esperando_art';
-        ctx.reply("📝 Siguiente artículo:");
+        ctx.reply(`📍 Zona: ${state.zona}\n📝 Nombre del artículo:`);
     } else if (data === 'FIN') {
         state.step = 'esperando_nota';
-        ctx.reply("📝 Ingrese Motivo / Nota:");
+        ctx.reply("📝 Motivo / Nota:");
     }
     ctx.answerCbQuery();
 });
@@ -74,30 +74,33 @@ bot.on('text', async (ctx) => {
     if (!state) return;
     const text = ctx.message.text.toUpperCase().trim();
 
-    if (state.step === 'historial_nombre') {
+    if (state.step === 'hist_art') {
         const res = await axios.get(URL_G, { params: { op: 'ver_historial', art: text } });
         if (res.data.msg) return ctx.reply(res.data.msg);
-        let m = `📜 **HISTORIAL: ${text}**\n`;
-        res.data.forEach(r => m += `• ${new Date(r[0]).toLocaleDateString()} | ${r[3]} | Cant: ${r[5]}\n`);
+        let m = `📜 **HISTORIAL: ${text}**\n` + "—".repeat(15) + "\n";
+        res.data.forEach(r => m += `• ${new Date(r.fecha).toLocaleDateString()} | ${r.zona} | Cant: ${r.cant} ${r.signo}\n`);
         delete userState[ctx.from.id];
         return ctx.replyWithMarkdown(m);
     }
-
+    if (state.step === 'creando_zona') {
+        state.zona = text;
+        state.step = 'esperando_art';
+        return ctx.reply(`✅ Zona "${text}" seleccionada.\n📝 Artículo:`);
+    }
     if (state.step === 'esperando_art') {
         state.tempArt = text;
         state.step = 'esperando_cant';
         ctx.reply(`🔢 Cantidad para ${text}:`);
     } else if (state.step === 'esperando_cant') {
         state.items.push(`${state.tempArt}:${text}`);
-        ctx.reply("✅ Agregado.", Markup.inlineKeyboard([[Markup.button.callback('➕ Otro', 'ADD'), Markup.button.callback('💾 Finalizar', 'FIN')]]));
+        ctx.reply("✅ Agregado.", Markup.inlineKeyboard([[Markup.button.callback('➕ Otro', 'Z:' + state.zona), Markup.button.callback('💾 Guardar', 'FIN')]]));
     } else if (state.step === 'esperando_nota') {
         await axios.post(URL_G, new URLSearchParams({
             op: 'procesar_accion', modo: state.modo, id: ctx.from.id,
-            zona: state.zona || '', zona_origen: state.zona_origen || '', 
-            zona_destino: state.zona_destino || '', articulos: state.items.join(','), nota: text
+            zona: state.zona, articulos: state.items.join(','), nota: text
         }).toString());
         delete userState[ctx.from.id];
-        ctx.reply("✅ OPERACIÓN COMPLETADA CON ÉXITO.");
+        ctx.reply("✅ OPERACIÓN COMPLETADA.");
     }
 });
 
