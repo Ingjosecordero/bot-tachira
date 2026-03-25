@@ -2,7 +2,7 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const express = require('express');
 
-const URL_G = "https://script.google.com/macros/s/AKfycbzjNezVuUpU6rsjsMg6HHoNHbbLtl-e4clL2SV66I0jZwSbq2tS28FMFeJDHbhA75jj4Q/exec"; 
+const URL_G = "https://script.google.com/macros/s/AKfycbxEQh8Jj-3-EJgGkm5J3DAfkuQN0ugVkZJ2XHF4jz45BD9-I5CLhYpRhh43NJQarZkO/exec"; 
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 const app = express();
 const userState = {};
@@ -40,25 +40,17 @@ bot.hears('📦 INV. GENERAL', async (ctx) => {
     }
 });
 
-// --- REPORTES POR ZONA (AGRUPADOS) ---
+// --- REPORTES POR ZONA (CON PREGUNTA DE ZONA) ---
 bot.hears('📂 REPS POR ZONA', async (ctx) => {
-    ctx.reply("⏳ Consultando reportes agrupados...");
-    try {
-        const res = await axios.get(URL_G, { params: { op: 'reps_por_zona' } });
-        for (const zona in res.data) {
-            let msg = `📍 **ZONA: ${zona}**\n` + "—".repeat(20) + "\n";
-            const tickets = res.data[zona];
-            for (const tkt in tickets) {
-                const info = tickets[tkt];
-                msg += `🎫 **TICKET:** \`${tkt}\`\n`;
-                msg += `📅 **Fecha:** ${new Date(info.fecha).toLocaleDateString()}\n`;
-                msg += `📝 **Nota:** _${info.nota}_\n`;
-                msg += `📦 **Materiales:**\n   ${info.arts.join('\n   ')}\n`;
-                msg += "—".repeat(10) + "\n";
-            }
-            await ctx.replyWithMarkdown(msg);
-        }
-    } catch (e) { ctx.reply("❌ Error al cargar datos."); }
+    userState[ctx.from.id] = { step: 'seleccion_reporte_zona' };
+    const res = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
+    const btns = [];
+    for (let i = 0; i < res.data.length; i += 2) {
+        const fila = [Markup.button.callback(res.data[i], `CONSULTA:${res.data[i]}`)];
+        if (res.data[i+1]) fila.push(Markup.button.callback(res.data[i+1], `CONSULTA:${res.data[i+1]}`));
+        btns.push(fila);
+    }
+    ctx.reply("📂 ¿De qué zona desea ver los últimos reportes?", Markup.inlineKeyboard(btns));
 });
 
 // --- HISTORIAL ---
@@ -84,8 +76,30 @@ bot.hears(['📥 AGREGAR ART.', '📤 SALIDA ART.', '📝 CREAR REPORTE', '🔄 
 
 bot.on('callback_query', async (ctx) => {
     const state = userState[ctx.from.id];
-    if (!state) return;
     const data = ctx.callbackQuery.data;
+
+    if (data.startsWith('CONSULTA:')) {
+        const zonaSel = data.split(':')[1];
+        ctx.reply(`⏳ Cargando reportes de ${zonaSel}...`);
+        const res = await axios.get(URL_G, { params: { op: 'reps_por_zona', zona: zonaSel } });
+        
+        if (res.data.orden.length === 0) return ctx.reply("No hay reportes en esta zona.");
+
+        for (const tkt of res.data.orden) {
+            const info = res.data.datos[tkt];
+            let msg = `🎫 **TICKET:** \`${tkt}\`\n`;
+            msg += `📅 **Fecha:** ${new Date(info.fecha).toLocaleDateString()}\n`;
+            msg += `📝 **Descripción:** _${info.nota}_\n`;
+            msg += `📦 **Materiales:**\n`;
+            info.arts.forEach(art => msg += `  • ${art}\n`); // Viñeta y lista
+            msg += "—".repeat(15);
+            await ctx.replyWithMarkdown(msg);
+        }
+        delete userState[ctx.from.id];
+        return ctx.answerCbQuery();
+    }
+
+    if (!state) return ctx.answerCbQuery();
 
     if (data.startsWith('Z:')) {
         const zona = data.split(':')[1];
@@ -105,7 +119,7 @@ bot.on('callback_query', async (ctx) => {
         ctx.reply("📝 Siguiente artículo:");
     } else if (data === 'FIN') {
         state.step = 'esperando_nota';
-        ctx.reply("📝 Descripción única del reporte:");
+        ctx.reply("📝 Descripción del trabajo:");
     }
     ctx.answerCbQuery();
 });
@@ -127,7 +141,7 @@ bot.on('text', async (ctx) => {
         ctx.reply(`🔢 Cantidad para ${text}:`);
     } else if (state.step === 'esperando_cant') {
         state.items.push(`${state.tempArt}:${text}`);
-        ctx.reply(`✅ "${state.tempArt}" añadido al reporte.`, Markup.inlineKeyboard([
+        ctx.reply(`✅ "${state.tempArt}" añadido.`, Markup.inlineKeyboard([
             [Markup.button.callback('➕ Añadir otro artículo', 'ADD')],
             [Markup.button.callback('💾 Guardar Reporte Final', 'FIN')]
         ]));
