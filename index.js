@@ -8,7 +8,7 @@ const URL_G = "https://script.google.com/macros/s/AKfycbwS7AWtfS0LPt-lYN1U2mUvTi
 const app = express();
 app.get('/', (req, res) => res.send('SISTEMA ACTIVO'));
 
-// Objeto temporal para guardar los pasos del usuario
+// Memoria temporal para los pasos de cada usuario
 const userState = {};
 
 const callApi = async (params = {}, data = null) => {
@@ -30,7 +30,7 @@ bot.start(async (ctx) => {
     ctx.reply(`CONTROL DE REGISTROS Y REPORTES\nBienvenido ${res.nombre}.`, mainButtons(res.rango));
 });
 
-// --- CONSULTAS DIRECTAS ---
+// --- FUNCIONES DE CONSULTA ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
     const res = await callApi({ op: 'consultar_inv' });
     if (!res) return ctx.reply("❌ Error de conexión.");
@@ -52,12 +52,16 @@ bot.hears('📊 VER SALIDAS', async (ctx) => {
     ctx.replyWithMarkdown(msg);
 });
 
-// --- LÓGICA DE REGISTRO (CREAR REPORTE / SALIDA) ---
-bot.hears(['📝 CREAR REPORTE', '📤 SALIDA ART.'], async (ctx) => {
-    userState[ctx.from.id] = { step: 'esperando_articulo', tipo: 'SALIDA' };
-    ctx.reply("📝 Ingrese el NOMBRE del artículo:");
+// --- INICIO DE FLUJOS DE REGISTRO ---
+bot.hears(['📤 SALIDA ART.', '📝 CREAR REPORTE', '📥 AGREGAR ART.', '🔄 TRANSFERIR'], (ctx) => {
+    const operacion = ctx.message.text.includes('SALIDA') || ctx.message.text.includes('REPORTE') ? 'SALIDA' : 
+                      ctx.message.text.includes('AGREGAR') ? 'ENTRADA' : 'TRANSFERENCIA';
+    
+    userState[ctx.from.id] = { step: 'esperando_articulo', tipo: operacion };
+    ctx.reply(`📝 [${operacion}] Ingrese el NOMBRE del artículo:`);
 });
 
+// --- MANEJADOR DE PASOS (TEXTO) ---
 bot.on('text', async (ctx) => {
     const state = userState[ctx.from.id];
     if (!state) return;
@@ -65,42 +69,61 @@ bot.on('text', async (ctx) => {
     if (state.step === 'esperando_articulo') {
         state.articulo = ctx.message.text.toUpperCase();
         state.step = 'esperando_cantidad';
-        ctx.reply(`🔢 Ingrese la CANTIDAD de "${state.articulo}":`);
+        ctx.reply(`🔢 Ingrese la CANTIDAD para "${state.articulo}":`);
     } 
     else if (state.step === 'esperando_cantidad') {
-        state.cantidad = ctx.message.text;
+        const cant = parseFloat(ctx.message.text);
+        if (isNaN(cant)) return ctx.reply("❌ Por favor, ingrese un número válido.");
+        
+        state.cantidad = cant;
         state.step = 'esperando_zona';
         const zonas = await callApi({ op: 'ver_zonas' });
         const btns = zonas.map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-        ctx.reply("📍 Seleccione la ZONA:", Markup.inlineKeyboard(btns));
+        ctx.reply("📍 Seleccione la ZONA/ORIGEN:", Markup.inlineKeyboard(btns));
     }
 });
 
+// --- MANEJADOR DE SELECCIÓN (BOTONES) ---
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const userId = ctx.from.id;
+    const state = userState[userId];
 
-    if (data.startsWith('ZSET:')) {
+    if (data.startsWith('ZSET:') && state) {
         const zona = data.split(':')[1];
-        const state = userState[userId];
-        if (!state) return ctx.answerCbQuery("Error de sesión.");
-
         ctx.answerCbQuery();
+
+        if (state.tipo === 'TRANSFERENCIA' && !state.zona_origen) {
+            state.zona_origen = zona;
+            const zonas = await callApi({ op: 'ver_zonas' });
+            const btns = zonas.filter(z => z !== zona).map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
+            return ctx.reply(`🔄 Origen: ${zona}. Ahora seleccione el DESTINO:`, Markup.inlineKeyboard(btns));
+        }
+
+        const zonaFinal = zona;
+        const operacionFinal = state.tipo === 'SALIDA' ? 'registrar_salida' : 
+                               state.tipo === 'ENTRADA' ? 'registrar_entrada' : 'registrar_transferencia';
+
         ctx.reply(`⏳ Procesando ${state.tipo}...`);
 
         const res = await callApi({}, {
-            op: 'registrar_salida',
+            op: operacionFinal,
             id: userId,
             art: state.articulo,
             cant: state.cantidad,
-            zona: zona
+            zona: zonaFinal,
+            origen: state.zona_origen || ""
         });
 
         delete userState[userId];
-        ctx.reply(res && res.ok ? `✅ Registro exitoso en ${zona}.` : `❌ Error: ${res.msg || "No se pudo registrar"}`);
+        if (res && res.ok) {
+            ctx.reply(`✅ Operación exitosa.\n📦 Art: ${state.articulo}\n🔢 Cant: ${state.cantidad}\n📍 Zona: ${zonaFinal}`);
+        } else {
+            ctx.reply(`❌ Error: ${res ? res.msg : "Fallo en la comunicación con Google"}`);
+        }
     }
 });
 
 bot.launch();
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Online on ${PORT}`));
+app.listen(PORT, () => console.log(`Bot operativo en puerto ${PORT}`));
