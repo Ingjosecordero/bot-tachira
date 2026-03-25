@@ -10,7 +10,6 @@ app.get('/', (req, res) => res.send('SISTEMA TACHIRA ACTIVO'));
 
 const userState = {};
 
-// Función de comunicación mejorada para evitar errores de caracteres
 const callApi = async (data) => {
     try {
         const formData = new URLSearchParams();
@@ -19,7 +18,7 @@ const callApi = async (data) => {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
         return res.data;
-    } catch (e) { return { ok: false, msg: "Error de conexión" }; }
+    } catch (e) { return { ok: false, msg: "Error de red" }; }
 };
 
 const mainButtons = (rango) => {
@@ -34,7 +33,7 @@ bot.start(async (ctx) => {
     ctx.reply(`CONTROL DE REGISTROS Y REPORTES\nBienvenido ${res.data.nombre}.`, mainButtons(res.data.rango));
 });
 
-// --- INICIO DE REPORTE: PRIMERO LA ZONA ---
+// --- INICIO: SELECCIÓN DE ZONA ---
 bot.hears(['📝 CREAR REPORTE', '📤 SALIDA ART.'], async (ctx) => {
     userState[ctx.from.id] = { items: [], step: 'esperando_zona' };
     const resZonas = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
@@ -48,23 +47,19 @@ bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data;
     if (!state) return ctx.answerCbQuery("Sesión expirada.");
 
-    // 1. SETEAR ZONA
     if (data.startsWith('ZSET:')) {
         state.zona = data.split(':')[1];
         state.step = 'esperando_articulo';
         ctx.answerCbQuery();
         ctx.reply(`📍 Zona: ${state.zona}\n📝 Ingrese el NOMBRE del artículo:`);
-    }
-    // 2. DECISIONES
-    else if (data === 'ADD_MORE') {
+    } else if (data === 'ADD_MORE') {
         state.step = 'esperando_articulo';
         ctx.answerCbQuery();
         ctx.reply("📝 Ingrese el NOMBRE del siguiente artículo:");
-    } 
-    else if (data === 'FINISH_ITEMS') {
+    } else if (data === 'FINISH_ITEMS') {
         state.step = 'esperando_detalles';
         ctx.answerCbQuery();
-        ctx.reply("📝 Describa los DETALLES del trabajo realizado:");
+        ctx.reply("📝 Describa brevemente el trabajo realizado (Ej: Mantenimiento en Torre o Cliente nuevo):");
     }
 });
 
@@ -72,37 +67,35 @@ bot.on('text', async (ctx) => {
     const state = userState[ctx.from.id];
     if (!state) return;
 
-    // VALIDACIÓN DE ARTÍCULO Y STOCK
     if (state.step === 'esperando_articulo') {
-        state.tempArt = ctx.message.text.toUpperCase();
-        ctx.reply(`⏳ Validando "${state.tempArt}" en ${state.zona}...`);
+        state.tempArt = ctx.message.text.trim().toUpperCase();
+        if (state.tempArt === "📦 INV. GENERAL") return; // Evita errores si tocan botones del menú
+
+        ctx.reply(`⏳ Validando stock de "${state.tempArt}" en ${state.zona}...`);
         
         const check = await axios.get(URL_G, { params: { op: 'check_stock', art: state.tempArt, zona: state.zona } });
         
         if (!check.data || !check.data.existe) {
-            return ctx.reply(`❌ El artículo "${state.tempArt}" no existe en el inventario de ${state.zona}. Intente con otro.`);
+            return ctx.reply(`❌ El artículo "${state.tempArt}" NO existe en ${state.zona}. Por favor, verifique el nombre.`);
         }
         
         state.stockDisponible = check.data.cantidad;
         state.step = 'esperando_cantidad';
-        ctx.reply(`🔢 Cantidad para "${state.tempArt}" (Disponible: ${state.stockDisponible}):`);
+        ctx.reply(`🔢 Cantidad para "${state.tempArt}"\n(Disponible en ${state.zona}: ${state.stockDisponible}):`);
     } 
-    
     else if (state.step === 'esperando_cantidad') {
         const cant = parseFloat(ctx.message.text);
-        if (isNaN(cant) || cant <= 0) return ctx.reply("❌ Ingrese un número válido.");
-        if (cant > state.stockDisponible) return ctx.reply(`❌ No hay stock suficiente. Máximo: ${state.stockDisponible}`);
+        if (isNaN(cant) || cant <= 0) return ctx.reply("❌ Ingrese una cantidad válida.");
+        if (cant > state.stockDisponible) return ctx.reply(`❌ No hay stock suficiente. Máximo disponible: ${state.stockDisponible}`);
         
         state.items.push(`${state.tempArt}:${cant}`);
         state.step = 'esperando_decision';
-        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Desea agregar más?`, 
+        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Desea incluir algo más en este reporte?`, 
             Markup.inlineKeyboard([[Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), Markup.button.callback('📝 Detallar y Guardar', 'FINISH_ITEMS')]]));
     }
-
-    // CAPTURA DE DETALLES Y GUARDADO FINAL
     else if (state.step === 'esperando_detalles') {
-        const detalles = ctx.message.text;
-        ctx.reply("⏳ Guardando reporte completo...");
+        const detalles = ctx.message.text.trim();
+        ctx.reply("⏳ Procesando reporte final...");
         
         const res = await callApi({
             op: 'registrar_salida',
@@ -114,9 +107,9 @@ bot.on('text', async (ctx) => {
 
         delete userState[ctx.from.id];
         if (res && res.ok) {
-            ctx.reply(`✅ REPORTE EXITOSO EN ${state.zona}.\n📝 Detalles: ${detalles}`);
+            ctx.reply(`✅ REPORTE GUARDADO CON ÉXITO.\n📍 Zona: ${state.zona}\n📝 Trabajo: ${detalles}`);
         } else {
-            ctx.reply("❌ Error al guardar en Google Sheets. Verifique la conexión.");
+            ctx.reply("❌ Hubo un fallo al guardar. Inténtelo de nuevo.");
         }
     }
 });
