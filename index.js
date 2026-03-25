@@ -2,38 +2,60 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const express = require('express');
 
+// --- CONFIGURACIÓN ---
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 const URL_G = "https://script.google.com/macros/s/AKfycbwS7AWtfS0LPt-lYN1U2mUvTiq_Z1_H1z1HUfbNGcxnIwRceFWyT76B8IozpJc2d8sbwQ/exec"; 
 
 const app = express();
-app.get('/', (req, res) => res.send('SISTEMA ACTIVO'));
+app.get('/', (req, res) => res.send('CONTROL DE REGISTROS ACTIVO'));
 
-// Memoria temporal para los pasos de cada usuario
+// Memoria de pasos
 const userState = {};
 
+// Función de comunicación robusta con Google
 const callApi = async (params = {}, data = null) => {
     try {
-        if (data) return (await axios.post(URL_G, data)).data;
-        return (await axios.get(URL_G, { params })).data;
-    } catch (e) { return null; }
+        if (data) {
+            // Convertimos los datos a formato x-www-form-urlencoded para Google Apps Script
+            const formData = new URLSearchParams();
+            for (const key in data) { formData.append(key, data[key]); }
+            
+            const response = await axios.post(URL_G, formData.toString(), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
+            return response.data;
+        }
+        const res = await axios.get(URL_G, { params });
+        return res.data;
+    } catch (e) { 
+        console.error("Error en API:", e.message);
+        return null; 
+    }
 };
 
+// Botones principales
 const mainButtons = (rango) => {
-    let btns = [['📦 INV. GENERAL', '📜 HISTORIAL ART.'], ['📤 SALIDA ART.', '🔄 TRANSFERIR'], ['📝 CREAR REPORTE', '📊 VER SALIDAS'], ['📂 REPS POR ZONA']];
+    let btns = [
+        ['📦 INV. GENERAL', '📜 HISTORIAL ART.'],
+        ['📤 SALIDA ART.', '🔄 TRANSFERIR'],
+        ['📝 CREAR REPORTE', '📊 VER SALIDAS'],
+        ['📂 REPS POR ZONA']
+    ];
     if (rango === "SUPERVISOR") btns.splice(1, 0, ['📥 AGREGAR ART.']);
     return Markup.keyboard(btns).resize();
 };
 
+// --- INICIO ---
 bot.start(async (ctx) => {
     const res = await callApi({ op: 'verificar', id: ctx.from.id });
     if (!res || !res.autorizado) return ctx.reply(`🚫 Acceso denegado: ${ctx.from.id}`);
     ctx.reply(`CONTROL DE REGISTROS Y REPORTES\nBienvenido ${res.nombre}.`, mainButtons(res.rango));
 });
 
-// --- FUNCIONES DE CONSULTA ---
+// --- CONSULTAS ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
     const res = await callApi({ op: 'consultar_inv' });
-    if (!res) return ctx.reply("❌ Error de conexión.");
+    if (!res) return ctx.reply("❌ Error al obtener inventario.");
     let msg = "🏢 **INVENTARIO GENERAL**\n", cz = "";
     res.forEach(r => {
         if (r[1].toUpperCase() !== cz) { cz = r[1].toUpperCase(); msg += `\n📍 **${cz}**\n`; }
@@ -44,7 +66,7 @@ bot.hears('📦 INV. GENERAL', async (ctx) => {
 
 bot.hears('📊 VER SALIDAS', async (ctx) => {
     const reps = await callApi({ op: 'ver_reps' });
-    if (!reps) return ctx.reply("❌ Sin datos.");
+    if (!reps) return ctx.reply("❌ Sin datos de reportes.");
     let msg = "📊 **ÚLTIMOS MOVIMIENTOS**\n" + "—".repeat(15) + "\n";
     reps.slice(-8).reverse().forEach(r => {
         msg += `🆔 \`${r[0]}\` | 📍 ${r[2]}\n📦 ${r[3]} : ${r[4]}\n👤 ${r[6]}\n` + "—".repeat(10) + "\n";
@@ -52,78 +74,15 @@ bot.hears('📊 VER SALIDAS', async (ctx) => {
     ctx.replyWithMarkdown(msg);
 });
 
-// --- INICIO DE FLUJOS DE REGISTRO ---
+// --- FLUJOS DE REGISTRO ---
 bot.hears(['📤 SALIDA ART.', '📝 CREAR REPORTE', '📥 AGREGAR ART.', '🔄 TRANSFERIR'], (ctx) => {
-    const operacion = ctx.message.text.includes('SALIDA') || ctx.message.text.includes('REPORTE') ? 'SALIDA' : 
-                      ctx.message.text.includes('AGREGAR') ? 'ENTRADA' : 'TRANSFERENCIA';
+    const opTxt = ctx.message.text;
+    const operacion = opTxt.includes('SALIDA') || opTxt.includes('REPORTE') ? 'SALIDA' : 
+                      opTxt.includes('AGREGAR') ? 'ENTRADA' : 'TRANSFERENCIA';
     
     userState[ctx.from.id] = { step: 'esperando_articulo', tipo: operacion };
     ctx.reply(`📝 [${operacion}] Ingrese el NOMBRE del artículo:`);
 });
 
-// --- MANEJADOR DE PASOS (TEXTO) ---
 bot.on('text', async (ctx) => {
     const state = userState[ctx.from.id];
-    if (!state) return;
-
-    if (state.step === 'esperando_articulo') {
-        state.articulo = ctx.message.text.toUpperCase();
-        state.step = 'esperando_cantidad';
-        ctx.reply(`🔢 Ingrese la CANTIDAD para "${state.articulo}":`);
-    } 
-    else if (state.step === 'esperando_cantidad') {
-        const cant = parseFloat(ctx.message.text);
-        if (isNaN(cant)) return ctx.reply("❌ Por favor, ingrese un número válido.");
-        
-        state.cantidad = cant;
-        state.step = 'esperando_zona';
-        const zonas = await callApi({ op: 'ver_zonas' });
-        const btns = zonas.map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-        ctx.reply("📍 Seleccione la ZONA/ORIGEN:", Markup.inlineKeyboard(btns));
-    }
-});
-
-// --- MANEJADOR DE SELECCIÓN (BOTONES) ---
-bot.on('callback_query', async (ctx) => {
-    const data = ctx.callbackQuery.data;
-    const userId = ctx.from.id;
-    const state = userState[userId];
-
-    if (data.startsWith('ZSET:') && state) {
-        const zona = data.split(':')[1];
-        ctx.answerCbQuery();
-
-        if (state.tipo === 'TRANSFERENCIA' && !state.zona_origen) {
-            state.zona_origen = zona;
-            const zonas = await callApi({ op: 'ver_zonas' });
-            const btns = zonas.filter(z => z !== zona).map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-            return ctx.reply(`🔄 Origen: ${zona}. Ahora seleccione el DESTINO:`, Markup.inlineKeyboard(btns));
-        }
-
-        const zonaFinal = zona;
-        const operacionFinal = state.tipo === 'SALIDA' ? 'registrar_salida' : 
-                               state.tipo === 'ENTRADA' ? 'registrar_entrada' : 'registrar_transferencia';
-
-        ctx.reply(`⏳ Procesando ${state.tipo}...`);
-
-        const res = await callApi({}, {
-            op: operacionFinal,
-            id: userId,
-            art: state.articulo,
-            cant: state.cantidad,
-            zona: zonaFinal,
-            origen: state.zona_origen || ""
-        });
-
-        delete userState[userId];
-        if (res && res.ok) {
-            ctx.reply(`✅ Operación exitosa.\n📦 Art: ${state.articulo}\n🔢 Cant: ${state.cantidad}\n📍 Zona: ${zonaFinal}`);
-        } else {
-            ctx.reply(`❌ Error: ${res ? res.msg : "Fallo en la comunicación con Google"}`);
-        }
-    }
-});
-
-bot.launch();
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Bot operativo en puerto ${PORT}`));
