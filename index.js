@@ -6,19 +6,20 @@ const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 const URL_G = "https://script.google.com/macros/s/AKfycbwS7AWtfS0LPt-lYN1U2mUvTiq_Z1_H1z1HUfbNGcxnIwRceFWyT76B8IozpJc2d8sbwQ/exec"; 
 
 const app = express();
-app.get('/', (req, res) => res.send('SISTEMA OPERATIVO'));
+app.get('/', (req, res) => res.send('BOT TACHIRA ONLINE'));
 
 const userState = {};
 
 const callApi = async (data) => {
     try {
-        const formData = new URLSearchParams();
-        for (const key in data) { formData.append(key, data[key]); }
-        const res = await axios.post(URL_G, formData.toString(), {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        const params = new URLSearchParams();
+        for (const key in data) { params.append(key, data[key]); }
+        const res = await axios.post(URL_G, params.toString(), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 15000
         });
         return res.data;
-    } catch (e) { return { ok: false, msg: "Error de conexión" }; }
+    } catch (e) { return { ok: false, msg: "Error de red" }; }
 };
 
 const mainButtons = (rango) => {
@@ -28,29 +29,25 @@ const mainButtons = (rango) => {
 };
 
 bot.start(async (ctx) => {
-    try {
-        const res = await axios.get(URL_G, { params: { op: 'verificar', id: ctx.from.id } });
-        if (!res.data || !res.data.autorizado) return ctx.reply(`🚫 Acceso denegado: ${ctx.from.id}`);
-        ctx.reply(`CONTROL DE REGISTROS Y REPORTES\nBienvenido ${res.data.nombre}.`, mainButtons(res.data.rango));
-    } catch (e) { ctx.reply("❌ Error al conectar con Google."); }
+    const res = await axios.get(URL_G, { params: { op: 'verificar', id: ctx.from.id } });
+    if (res.data && res.data.autorizado) {
+        return ctx.reply(`CONTROL DE REGISTROS\nBienvenido ${res.data.nombre}.`, mainButtons(res.data.rango));
+    }
+    ctx.reply("🚫 Acceso denegado.");
 });
 
-// --- INVENTARIO POR MENSAJES INDEPENDIENTES ---
+// --- INVENTARIO ESTÉTICO POR MENSAJES ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
     ctx.reply("⏳ Consultando inventario por zonas...");
     try {
         const res = await axios.get(URL_G, { params: { op: 'consultar_inv' } });
-        const inventario = res.data;
-        
-        // Agrupamos por zona
         const zonas = {};
-        inventario.forEach(r => {
-            const zona = r[1].toUpperCase();
-            if (!zonas[zona]) zonas[zona] = [];
-            zonas[zona].push(`• ${r[0]}  ➔  \`${r[2]}\``);
+        res.data.forEach(r => {
+            const zonaNombre = r[1].toUpperCase().trim();
+            if (!zonas[zonaNombre]) zonas[zonaNombre] = [];
+            zonas[zonaNombre].push(`• ${r[0]}  ➔  \`${r[2]}\``);
         });
 
-        // Enviamos un mensaje por cada zona
         for (const zona in zonas) {
             let msg = `📍 **ZONA: ${zona}**\n` + "—".repeat(15) + "\n";
             msg += zonas[zona].join("\n");
@@ -59,85 +56,78 @@ bot.hears('📦 INV. GENERAL', async (ctx) => {
     } catch (e) { ctx.reply("❌ Error al cargar inventario."); }
 });
 
-// --- FLUJO DE REPORTE ---
 bot.hears(['📝 CREAR REPORTE', '📤 SALIDA ART.'], async (ctx) => {
     userState[ctx.from.id] = { items: [], step: 'esperando_zona' };
     const resZonas = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
     const btns = resZonas.data.map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-    ctx.reply("📍 Seleccione la ZONA del trabajo:", Markup.inlineKeyboard(btns));
+    ctx.reply("📍 Seleccione la ZONA:", Markup.inlineKeyboard(btns));
 });
 
 bot.on('callback_query', async (ctx) => {
     const userId = ctx.from.id;
     const state = userState[userId];
-    const data = ctx.callbackQuery.data;
+    if (!state) return;
 
-    if (!state) return ctx.answerCbQuery("Sesión expirada.");
-
-    if (data.startsWith('ZSET:')) {
-        state.zona = data.split(':')[1];
+    if (ctx.callbackQuery.data.startsWith('ZSET:')) {
+        state.zona = ctx.callbackQuery.data.split(':')[1];
         state.step = 'esperando_articulo';
-        ctx.answerCbQuery();
-        ctx.reply(`📍 Zona: ${state.zona}\n📝 Ingrese el NOMBRE del artículo:`);
-    } 
-    else if (data === 'ADD_MORE') {
+        await ctx.answerCbQuery();
+        ctx.reply(`📍 Zona: ${state.zona}\n📝 Ingrese NOMBRE del artículo:`);
+    } else if (ctx.callbackQuery.data === 'ADD_MORE') {
         state.step = 'esperando_articulo';
-        ctx.answerCbQuery();
-        ctx.reply("📝 Ingrese el NOMBRE del siguiente artículo:");
-    } 
-    else if (data === 'FINISH_ITEMS') {
+        await ctx.answerCbQuery();
+        ctx.reply("📝 Ingrese nombre del siguiente artículo:");
+    } else if (ctx.callbackQuery.data === 'FINISH') {
         state.step = 'esperando_detalles';
-        ctx.answerCbQuery();
-        ctx.reply("📝 Escriba los DETALLES del reporte (Qué se hizo):");
+        await ctx.answerCbQuery();
+        ctx.reply("📝 Escriba los DETALLES del trabajo:");
     }
 });
 
 bot.on('text', async (ctx) => {
     const state = userState[ctx.from.id];
-    if (!state) return;
-    const text = ctx.message.text.toUpperCase();
-
-    // Validar que no sea un botón del menú
-    if (text.includes('INV.') || text.includes('REPORTE')) return;
+    if (!state || state.step === 'esperando_zona') return;
+    const text = ctx.message.text.trim();
 
     if (state.step === 'esperando_articulo') {
-        state.tempArt = text;
-        ctx.reply(`⏳ Validando stock de "${text}" en ${state.zona}...`);
-        const check = await axios.get(URL_G, { params: { op: 'check_stock', art: text, zona: state.zona } });
+        state.tempArt = text.toUpperCase();
+        ctx.reply(`⏳ Validando stock en ${state.zona}...`);
+        
+        // Enviamos el nombre trim para evitar fallos por espacios
+        const check = await axios.get(URL_G, { params: { op: 'check_stock', art: state.tempArt, zona: state.zona } });
         
         if (!check.data || !check.data.existe) {
-            return ctx.reply(`❌ "${text}" no existe en ${state.zona}. Verifique el nombre.`);
+            return ctx.reply(`❌ El artículo "${state.tempArt}" no se encontró en ${state.zona}.\n\n💡 Verifique que el nombre sea igual al del Inventario General.`);
         }
         
-        state.stockDisp = check.data.cantidad;
+        state.stockDisp = parseFloat(check.data.cantidad);
         state.step = 'esperando_cantidad';
-        ctx.reply(`🔢 Cantidad (Disponible: ${state.stockDisp}):`);
+        ctx.reply(`🔢 Cantidad para "${state.tempArt}"\n(Disponible: ${state.stockDisp}):`);
     } 
     else if (state.step === 'esperando_cantidad') {
-        const cant = parseFloat(text);
-        if (isNaN(cant) || cant <= 0 || cant > state.stockDisp) {
-            return ctx.reply(`❌ Cantidad inválida. Máximo disponible: ${state.stockDisp}`);
-        }
+        const cant = parseFloat(text.replace(',', '.')); // Soporta comas decimales
+        if (isNaN(cant) || cant <= 0) return ctx.reply("❌ Ingrese un número válido.");
+        if (cant > state.stockDisp) return ctx.reply(`❌ No hay suficiente. Stock: ${state.stockDisp}`);
+        
         state.items.push(`${state.tempArt}:${cant}`);
         state.step = 'esperando_decision';
-        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Desea agregar más?`, 
+        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Algo más?`, 
             Markup.inlineKeyboard([[
                 Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), 
-                Markup.button.callback('📝 Detallar y Guardar', 'FINISH_ITEMS')
+                Markup.button.callback('💾 Finalizar', 'FINISH')
             ]]));
     }
     else if (state.step === 'esperando_detalles') {
-        const detalles = ctx.message.text;
-        ctx.reply("⏳ Procesando reporte final...");
+        ctx.reply("⏳ Guardando reporte...");
         const res = await callApi({
             op: 'registrar_salida',
             id: ctx.from.id,
             art: state.items.join(','),
             zona: state.zona,
-            detalles: detalles
+            detalles: text
         });
         delete userState[ctx.from.id];
-        ctx.reply(res && res.ok ? `✅ REPORTE GUARDADO.\n📍 ${state.zona}\n📝 ${detalles}` : "❌ Error al guardar.");
+        ctx.reply(res && res.ok ? "✅ REPORTE GUARDADO CON ÉXITO." : "❌ Error al guardar.");
     }
 });
 
