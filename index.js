@@ -2,15 +2,16 @@ const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const express = require('express');
 
-// URL DE TU NUEVO SCRIPT DE GOOGLE
-const URL_G = "https://script.google.com/macros/s/AKfycbzytpKk528iGJJuMJ0h_uWM-4QM2Szu8LUdxgGvjto34Aho9FQ4horYiHfkcJhacE5ABg/exec"; 
+// URL ACTUALIZADA
+const URL_G = "https://script.google.com/macros/s/AKfycbzMVqPBZial4vXRbtLb4S8bGvT_1PzIhjH4sYuWI_O_An6EVkuhFCZhSnPRziYsVYrHwg/exec"; 
 const bot = new Telegraf("8345495015:AAE3HrmtWlB3EUHPHW-5PJwZ0wgMuUm6uXM");
 
 const app = express();
-app.get('/', (req, res) => res.send('BOT OPERATIVO'));
+app.get('/', (req, res) => res.send('BOT TACHIRA: ONLINE'));
 
 const userState = {};
 
+// Función para enviar reportes
 const callApi = async (data) => {
     try {
         const params = new URLSearchParams();
@@ -20,7 +21,7 @@ const callApi = async (data) => {
             timeout: 20000
         });
         return res.data;
-    } catch (e) { return { ok: false, msg: "Fallo de conexión" }; }
+    } catch (e) { return { ok: false, msg: "Fallo de red" }; }
 };
 
 const mainButtons = (rango) => {
@@ -30,16 +31,21 @@ const mainButtons = (rango) => {
 };
 
 bot.start(async (ctx) => {
+    const userId = ctx.from.id.toString();
     try {
-        const res = await axios.get(URL_G, { params: { op: 'verificar', id: ctx.from.id } });
+        const res = await axios.get(URL_G, { params: { op: 'verificar', id: userId } });
+        
         if (res.data && res.data.autorizado) {
             return ctx.reply(`✅ ACCESO CONCEDIDO\nBienvenido ${res.data.nombre}.`, mainButtons(res.data.rango));
         }
-        // Si no está autorizado, muestra el ID para facilitar el registro
-        ctx.reply(`🚫 ID no autorizado: ${ctx.from.id}\nPor favor, regístrelo en la base de datos.`);
-    } catch (e) { ctx.reply("❌ Error de comunicación con el servidor de datos."); }
+        
+        ctx.reply(`🚫 ID NO AUTORIZADO\nSu ID es: \`${userId}\` (Tóquelo para copiar)\n\nAsegúrese de que esté en la pestaña "Usuarios" en la columna A.`);
+    } catch (e) {
+        ctx.reply("❌ Error: No se pudo conectar con la base de datos.");
+    }
 });
 
+// --- INVENTARIO POR ZONAS ---
 bot.hears('📦 INV. GENERAL', async (ctx) => {
     ctx.reply("⏳ Consultando almacenes...");
     try {
@@ -53,37 +59,36 @@ bot.hears('📦 INV. GENERAL', async (ctx) => {
         for (const z in zonas) {
             await ctx.replyWithMarkdown(`📍 **ZONA: ${z}**\n` + "—".repeat(20) + "\n" + zonas[z].join("\n"));
         }
-    } catch (e) { ctx.reply("❌ Error al cargar inventario."); }
+    } catch (e) { ctx.reply("❌ Error al obtener inventario."); }
 });
 
+// --- FLUJO DE REPORTE ---
 bot.hears(['📝 CREAR REPORTE', '📤 SALIDA ART.'], async (ctx) => {
     userState[ctx.from.id] = { items: [], step: 'esperando_zona' };
     try {
         const resZonas = await axios.get(URL_G, { params: { op: 'ver_zonas' } });
         const btns = resZonas.data.map(z => [Markup.button.callback(z, `ZSET:${z}`)]);
-        ctx.reply("📍 Seleccione la ZONA del trabajo:", Markup.inlineKeyboard(btns));
+        ctx.reply("📍 Seleccione la ZONA:", Markup.inlineKeyboard(btns));
     } catch (e) { ctx.reply("❌ Error al cargar zonas."); }
 });
 
 bot.on('callback_query', async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userState[userId];
+    const state = userState[ctx.from.id];
     if (!state) return ctx.answerCbQuery("Sesión expirada.");
-    const data = ctx.callbackQuery.data;
 
-    if (data.startsWith('ZSET:')) {
-        state.zona = data.split(':')[1];
+    if (ctx.callbackQuery.data.startsWith('ZSET:')) {
+        state.zona = ctx.callbackQuery.data.split(':')[1];
         state.step = 'esperando_articulo';
         await ctx.answerCbQuery();
         ctx.reply(`📍 Zona: ${state.zona}\n📝 Escriba el NOMBRE del artículo:`);
-    } else if (data === 'ADD_MORE') {
+    } else if (ctx.callbackQuery.data === 'ADD_MORE') {
         state.step = 'esperando_articulo';
         await ctx.answerCbQuery();
         ctx.reply("📝 Ingrese el siguiente artículo:");
-    } else if (data === 'FINISH') {
+    } else if (ctx.callbackQuery.data === 'FINISH') {
         state.step = 'esperando_detalles';
         await ctx.answerCbQuery();
-        ctx.reply("📝 Describa el trabajo realizado:");
+        ctx.reply("📝 Describa qué trabajo se realizó:");
     }
 });
 
@@ -103,7 +108,7 @@ bot.on('text', async (ctx) => {
                 state.step = 'esperando_cantidad';
                 ctx.reply(`🔢 Cantidad para "${state.tempArt}"\n(Disponible: ${state.stockDisp}):`);
             } else {
-                ctx.reply(`❌ El artículo "${state.tempArt}" no existe en ${state.zona}.\n\n💡 Revisa el nombre en 📦 INV. GENERAL.`);
+                ctx.reply(`❌ El artículo "${state.tempArt}" no existe en ${state.zona}.`);
             }
         } catch (e) { ctx.reply("❌ Error de validación."); }
     } 
@@ -114,11 +119,9 @@ bot.on('text', async (ctx) => {
         }
         state.items.push(`${state.tempArt}:${cant}`);
         state.step = 'esperando_decision';
-        ctx.reply(`✅ Agregado: ${state.tempArt} (${cant})\n¿Desea agregar más?`, 
-            Markup.inlineKeyboard([[
-                Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), 
-                Markup.button.callback('💾 Finalizar y Guardar', 'FINISH')
-            ]]));
+        ctx.reply(`✅ Agregado. ¿Desea agregar más?`, Markup.inlineKeyboard([
+            [Markup.button.callback('➕ Agregar Otro', 'ADD_MORE'), Markup.button.callback('💾 Finalizar', 'FINISH')]
+        ]));
     }
     else if (state.step === 'esperando_detalles') {
         ctx.reply("⏳ Guardando reporte...");
